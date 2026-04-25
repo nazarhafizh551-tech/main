@@ -1,58 +1,86 @@
-require("dotenv").config();
-
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const fs = require("fs");
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
 
-const posted = new Set();
+// ===== CONFIG =====
+const CHANNEL_ID = process.env.CHANNEL_ID;
+const CHECK_INTERVAL = 30000; // 30 detik (cepat tapi aman)
+const DATA_FILE = "data.json";
 
+// ===== LOAD DATA =====
+let posted = new Set();
+if (fs.existsSync(DATA_FILE)) {
+  const data = JSON.parse(fs.readFileSync(DATA_FILE));
+  posted = new Set(data);
+}
+
+// ===== SAVE DATA =====
+function saveData() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify([...posted]));
+}
+
+// ===== FETCH DETAIL =====
 async function getItemDetails(url) {
   try {
-    const { data } = await axios.get(url);
+    const { data } = await axios.get(url, { timeout: 10000 });
     const $ = cheerio.load(data);
 
     const name = $("h1").first().text().trim();
 
-    let details = {
-      name,
-      limit: "Unknown",
-      quantity: "Unknown",
-      creator: "Unknown",
-      price: "FREE",
-      availability: "Unknown",
-      locations: [],
-      image: $("img").first().attr("src")
-    };
+    let limit = "Unknown";
+    let quantity = "Unknown";
+    let creator = "Unknown";
+    let availability = "Catalog";
+    let locations = [];
 
     $("div").each((i, el) => {
       const text = $(el).text();
 
-      if (text.includes("Limit")) details.limit = text.replace("Limit", "").trim();
-      if (text.includes("Quantity")) details.quantity = text.replace("Quantity", "").trim();
-      if (text.includes("Creator")) details.creator = text.replace("Creator", "").trim();
-      if (text.includes("In-Game")) details.availability = "In-Game Only";
+      if (text.includes("Limit")) limit = text.replace(/[^0-9]/g, "");
+      if (text.includes("Quantity")) quantity = text.replace(/[^0-9]/g, "");
+      if (text.includes("Creator")) creator = text.replace("Creator", "").trim();
+      if (text.includes("In-Game")) availability = "In-Game Only";
     });
 
     $("li").each((i, el) => {
       const loc = $(el).text().trim();
-      if (loc.length > 3) details.locations.push("• " + loc);
+      if (loc.length > 4 && loc.length < 60) {
+        locations.push("• " + loc);
+      }
     });
 
-    return details;
+    const image = $("img").first().attr("src");
+
+    return {
+      name,
+      limit,
+      quantity,
+      creator,
+      availability,
+      locations: locations.slice(0, 5),
+      image
+    };
 
   } catch (err) {
-    console.error("Detail error:", err.message);
+    console.log("Detail error:", err.message);
     return null;
   }
 }
 
+// ===== MAIN CHECK =====
 async function checkUGC() {
   try {
-    const { data } = await axios.get("https://www.rolimons.com/free-roblox-limiteds");
+    console.log("🔍 Checking UGC...");
+
+    const { data } = await axios.get("https://www.rolimons.com/free-roblox-limiteds", {
+      timeout: 10000
+    });
+
     const $ = cheerio.load(data);
 
     let links = [];
@@ -64,15 +92,16 @@ async function checkUGC() {
       }
     });
 
-    links = [...new Set(links)].slice(0, 5);
+    links = [...new Set(links)].slice(0, 10);
 
     for (let link of links) {
       if (posted.has(link)) continue;
 
       const item = await getItemDetails(link);
-      if (!item) continue;
+      if (!item || !item.name) continue;
 
       posted.add(link);
+      saveData();
 
       const embed = new EmbedBuilder()
         .setAuthor({
@@ -88,7 +117,7 @@ async function checkUGC() {
           `✨ **UGC Went Limited**\n` +
           `⛔ **Limit ${item.limit}**\n` +
           `🎮 **${item.availability}**\n` +
-          `🌐 [Roblox Page](${link}) | 👕 Try On`
+          `🌐 [Roblox Page](${link})`
         )
 
         .addFields(
@@ -99,7 +128,7 @@ async function checkUGC() {
           },
           {
             name: "Price",
-            value: item.price,
+            value: "FREE",
             inline: true
           },
           {
@@ -112,20 +141,30 @@ async function checkUGC() {
             value: item.creator,
             inline: false
           }
-        );
+        )
+        .setTimestamp();
 
-      const channel = await client.channels.fetch(process.env.CHANNEL_ID);
-      await channel.send({ embeds: [embed] });
+      try {
+        const channel = await client.channels.fetch(CHANNEL_ID);
+        await channel.send({ embeds: [embed] });
+        console.log("✅ Sent:", item.name);
+      } catch (err) {
+        console.log("Send error:", err.message);
+      }
+
+      await new Promise(r => setTimeout(r, 2000)); // anti rate limit
     }
 
   } catch (err) {
-    console.error("Main error:", err.message);
+    console.log("Main error:", err.message);
   }
 }
 
+// ===== READY =====
 client.once("ready", () => {
-  console.log(`Online sebagai ${client.user.tag}`);
-  setInterval(checkUGC, 60000);
+  console.log(`🚀 Online sebagai ${client.user.tag}`);
+  setInterval(checkUGC, CHECK_INTERVAL);
 });
 
+// ===== LOGIN =====
 client.login(process.env.TOKEN);
