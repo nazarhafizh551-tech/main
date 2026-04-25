@@ -1,170 +1,154 @@
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-const axios = require('axios');
-const cheerio = require('cheerio');
+// index.js
+require("dotenv").config();
+const axios = require("axios");
+const cheerio = require("cheerio");
 const fs = require("fs");
 
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
-});
+const WEBHOOK = process.env.WEBHOOK_URL;
+const CHECK_DELAY = 1000; // 1 detik
+const DB_FILE = "sent.json";
 
-// ===== CONFIG =====
-const CHANNEL_ID = process.env.CHANNEL_ID;
-const CHECK_INTERVAL = 30000; // 30 detik (cepat tapi aman)
-const DATA_FILE = "data.json";
+let sent = new Set();
 
-// ===== LOAD DATA =====
-let posted = new Set();
-if (fs.existsSync(DATA_FILE)) {
-  const data = JSON.parse(fs.readFileSync(DATA_FILE));
-  posted = new Set(data);
+// Load database item terkirim
+if (fs.existsSync(DB_FILE)) {
+    const data = JSON.parse(fs.readFileSync(DB_FILE));
+    sent = new Set(data);
 }
 
-// ===== SAVE DATA =====
-function saveData() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify([...posted]));
+// Save database
+function saveDB() {
+    fs.writeFileSync(DB_FILE, JSON.stringify([...sent], null, 2));
 }
 
-// ===== FETCH DETAIL =====
-async function getItemDetails(url) {
-  try {
-    const { data } = await axios.get(url, { timeout: 10000 });
-    const $ = cheerio.load(data);
-
-    const name = $("h1").first().text().trim();
-
-    let limit = "Unknown";
-    let quantity = "Unknown";
-    let creator = "Unknown";
-    let availability = "Catalog";
-    let locations = [];
-
-    $("div").each((i, el) => {
-      const text = $(el).text();
-
-      if (text.includes("Limit")) limit = text.replace(/[^0-9]/g, "");
-      if (text.includes("Quantity")) quantity = text.replace(/[^0-9]/g, "");
-      if (text.includes("Creator")) creator = text.replace("Creator", "").trim();
-      if (text.includes("In-Game")) availability = "In-Game Only";
-    });
-
-    $("li").each((i, el) => {
-      const loc = $(el).text().trim();
-      if (loc.length > 4 && loc.length < 60) {
-        locations.push("• " + loc);
-      }
-    });
-
-    const image = $("img").first().attr("src");
-
-    return {
-      name,
-      limit,
-      quantity,
-      creator,
-      availability,
-      locations: locations.slice(0, 5),
-      image
-    };
-
-  } catch (err) {
-    console.log("Detail error:", err.message);
-    return null;
-  }
-}
-
-// ===== MAIN CHECK =====
-async function checkUGC() {
-  try {
-    console.log("🔍 Checking UGC...");
-
+// Ambil item Rolimons
+async function getItems() {
     const { data } = await axios.get("https://www.rolimons.com/free-roblox-limiteds", {
-      timeout: 10000
+        headers: {
+            "User-Agent": "Mozilla/5.0"
+        }
     });
 
     const $ = cheerio.load(data);
+    const items = [];
 
-    let links = [];
+    $(".card, .limited-card, .item-card").each((i, el) => {
+        const name = $(el).find("h3,h4,.item-name").first().text().trim();
+        if (!name) return;
 
-    $("a").each((i, el) => {
-      const href = $(el).attr("href");
-      if (href && href.includes("/item/")) {
-        links.push("https://www.rolimons.com" + href);
-      }
+        const creator =
+            $(el).find(".creator,.creator-name").text().trim() || "Unknown";
+
+        const qty =
+            $(el).find(".stock,.quantity").text().trim() || "Unknown";
+
+        const image =
+            $(el).find("img").attr("src") || "";
+
+        const roblox =
+            $(el).find("a:contains('Roblox Page')").attr("href") ||
+            "https://roblox.com/catalog";
+
+        const tryon =
+            $(el).find("a:contains('Try On')").attr("href") ||
+            roblox;
+
+        const sale = [];
+
+        $(el).find("a").each((_, a) => {
+            const text = $(a).text().trim();
+            const href = $(a).attr("href");
+
+            if (
+                text &&
+                href &&
+                !text.includes("Roblox") &&
+                !text.includes("Try")
+            ) {
+                sale.push(`[${text}](https://www.rolimons.com${href})`);
+            }
+        });
+
+        items.push({
+            id: name,
+            name,
+            creator,
+            qty,
+            image,
+            roblox,
+            tryon,
+            sale: sale.join("\n") || "None"
+        });
     });
 
-    links = [...new Set(links)].slice(0, 10);
-
-    for (let link of links) {
-      if (posted.has(link)) continue;
-
-      const item = await getItemDetails(link);
-      if (!item || !item.name) continue;
-
-      posted.add(link);
-      saveData();
-
-      const embed = new EmbedBuilder()
-        .setAuthor({
-          name: "Rolimon's",
-          iconURL: "https://www.rolimons.com/static/rolimons_logo.png"
-        })
-        .setTitle(item.name)
-        .setURL(link)
-        .setColor(0x4f8cff)
-        .setThumbnail(item.image)
-
-        .setDescription(
-          `✨ **UGC Went Limited**\n` +
-          `⛔ **Limit ${item.limit}**\n` +
-          `🎮 **${item.availability}**\n` +
-          `🌐 [Roblox Page](${link})`
-        )
-
-        .addFields(
-          {
-            name: "Sale Locations",
-            value: item.locations.join("\n") || "Unknown",
-            inline: false
-          },
-          {
-            name: "Price",
-            value: "FREE",
-            inline: true
-          },
-          {
-            name: "Quantity",
-            value: item.quantity,
-            inline: true
-          },
-          {
-            name: "Creator",
-            value: item.creator,
-            inline: false
-          }
-        )
-        .setTimestamp();
-
-      try {
-        const channel = await client.channels.fetch(CHANNEL_ID);
-        await channel.send({ embeds: [embed] });
-        console.log("✅ Sent:", item.name);
-      } catch (err) {
-        console.log("Send error:", err.message);
-      }
-
-      await new Promise(r => setTimeout(r, 2000)); // anti rate limit
-    }
-
-  } catch (err) {
-    console.log("Main error:", err.message);
-  }
+    return items;
 }
 
-// ===== READY =====
-client.once("ready", () => {
-  console.log(`🚀 Online sebagai ${client.user.tag}`);
-  setInterval(checkUGC, CHECK_INTERVAL);
-});
+// Kirim Discord
+async function send(item) {
+    if (sent.has(item.id)) return;
 
-// ===== LOGIN =====
-client.login(process.env.TOKEN);
+    sent.add(item.id);
+    saveDB();
+
+    await axios.post(WEBHOOK, {
+        content: "@everyone 🚨 NEW FREE LIMITED FOUND!",
+        embeds: [{
+            color: 3447003,
+            author: {
+                name: "Rolimon's",
+                icon_url: "https://www.rolimons.com/favicon.ico"
+            },
+            title: item.name,
+            description:
+`✨ UGC Back Accessory Went Limited
+🎮 In-Game Only
+
+🌐 [Roblox Page](${item.roblox})
+👕 [Try On](${item.tryon})`,
+            thumbnail: {
+                url: item.image
+            },
+            fields: [
+                {
+                    name: "Sale Locations",
+                    value: item.sale
+                },
+                {
+                    name: "Quantity",
+                    value: item.qty,
+                    inline: true
+                },
+                {
+                    name: "Creator",
+                    value: item.creator,
+                    inline: true
+                }
+            ],
+            footer: {
+                text: "Rolimons Instant Monitor"
+            },
+            timestamp: new Date()
+        }]
+    });
+
+    console.log("Sent:", item.name);
+}
+
+// Monitoring ultra cepat
+async function monitor() {
+    try {
+        const items = await getItems();
+
+        for (const item of items) {
+            await send(item);
+        }
+
+    } catch (err) {
+        console.log("Error, retrying...");
+    }
+}
+
+console.log("🚀 Railway PRO Running...");
+setInterval(monitor, CHECK_DELAY);
+monitor();
