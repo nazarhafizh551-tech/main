@@ -29,7 +29,7 @@ def load_sent_items():
 
 def save_sent_items(sent_set):
     with open(DATA_FILE, "w") as f:
-        json.dump(list(sent_set)[-1200:], f)
+        json.dump(list(sent_set)[-1500:], f)
 
 sent_items = load_sent_items()
 
@@ -42,55 +42,54 @@ async def scrape_free_ugc():
     async with aiohttp.ClientSession(headers=headers) as session:
         async with session.get(url) as resp:
             if resp.status != 200:
-                print(f"[{datetime.now(UTC)}] ❌ Gagal mengambil halaman: {resp.status}")
+                print(f"[{datetime.now(UTC)}] ❌ Gagal fetch halaman: {resp.status}")
                 return []
             html = await resp.text()
     
     soup = BeautifulSoup(html, 'html.parser')
-    text = soup.get_text(separator="\n")
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = [line.strip() for line in soup.get_text(separator="\n").splitlines() if line.strip()]
     
     items = []
     i = 0
     while i < len(lines):
         line = lines[i]
         
-        # Deteksi nama item (baris yang cukup panjang dan bukan stock/lokasi)
-        if (len(line) > 12 and 
+        # Deteksi nama item (pola yang lebih ketat)
+        if (len(line) > 8 and 
             not re.search(r'^\d+/\d+$', line) and
-            not any(k in line.lower() for k in ["stock", "flex ugc codes", "minutes ago", "hours ago", "ago", "sale locations", "price", "creator"])):
+            not any(k in line.lower() for k in ["stock", "flex ugc codes", "minutes ago", "hours ago", "ago", "providing statistics", "roblox trading"])):
             
-            name = line
+            name = line.strip()
             stock = "Limited"
             location = "Flex UGC Codes"
             time_ago = ""
             
-            # Ambil info di beberapa baris berikutnya
-            for j in range(1, 8):
+            # Ambil data berikutnya
+            for j in range(1, 10):
                 if i + j >= len(lines):
                     break
-                next_line = lines[i + j]
-                if re.search(r'^\d+/\d+$', next_line) or "Stock" in next_line:
-                    stock = next_line
-                elif "Flex UGC Codes" in next_line or "roblox.com/games" in next_line:
+                nxt = lines[i + j]
+                if re.search(r'^\d+ ?/ ?\d+$', nxt):
+                    stock = nxt
+                elif "Flex UGC Codes" in nxt or "roblox.com/games" in nxt:
                     location = "Flex UGC Codes"
-                elif "Lucky Box" in next_line:
+                elif "Lucky Box" in nxt:
                     location = "Lucky Box Free UGC"
-                elif any(x in next_line for x in ["minutes ago", "hours ago", "ago"]):
-                    time_ago = next_line
+                elif any(x in nxt for x in ["minutes ago", "hours ago", "ago"]):
+                    time_ago = nxt
             
             items.append({
-                "name": name[:180],
+                "name": name[:200],
                 "stock": stock,
                 "location": location,
                 "time": time_ago
             })
-            i += 4  # loncat agar tidak duplikat
+            i += 5   # loncat lebih jauh supaya tidak duplikat
         else:
             i += 1
     
     print(f"[{datetime.now(UTC)}] ✅ Ditemukan {len(items)} item free UGC.")
-    return items[:15]  # 15 item terbaru
+    return items[:12]  # ambil 12 item terbaru
 
 @tasks.loop(minutes=CHECK_INTERVAL)
 async def check_free_limiteds():
@@ -122,16 +121,17 @@ async def check_free_limiteds():
         embed.add_field(name="Price", value="**FREE**", inline=True)
         embed.add_field(name="Creator", value="Various UGC Creators", inline=False)
         
+        footer = "Rolimons • Ambil secepatnya sebelum stock habis!"
         if item.get("time"):
-            embed.set_footer(text=f"Rolimons • {item['time']} • Ambil secepatnya sebelum habis!")
-        else:
-            embed.set_footer(text="Rolimons • Ambil secepatnya sebelum stock habis!")
+            footer = f"Rolimons • {item['time']} • Ambil secepatnya!"
+        
+        embed.set_footer(text=footer)
 
         try:
             await channel.send("@everyone **New Free Limited UGC Terdeteksi!** 🚨", embed=embed)
             sent_items.add(item_name)
             notified += 1
-            print(f"✅ Berhasil terkirim: {item_name[:60]}...")
+            print(f"✅ Terkirim: {item_name[:70]}...")
         except Exception as e:
             print(f"❌ Gagal kirim: {e}")
 
@@ -139,7 +139,7 @@ async def check_free_limiteds():
         save_sent_items(sent_items)
         print(f"Total notifikasi baru: {notified}")
     else:
-        print("Tidak ada item baru yang belum dikirim.")
+        print("Tidak ada item baru.")
 
 @bot.event
 async def on_ready():
