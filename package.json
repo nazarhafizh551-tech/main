@@ -1,5 +1,5 @@
 {
-  "name": "rolimons-monitor",
+  "name": "rolimons-puppeteer",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -7,6 +7,6 @@
   },
   "dependencies": {
     "axios": "^1.6.0",
-    "cheerio": "^1.0.0"
+    "puppeteer": "^22.8.2"
   }
 }
