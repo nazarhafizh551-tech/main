@@ -42,7 +42,7 @@ async def scrape_free_ugc():
     async with aiohttp.ClientSession(headers=headers) as session:
         async with session.get(url) as resp:
             if resp.status != 200:
-                print(f"[{datetime.now(UTC)}] ❌ Gagal fetch halaman: {resp.status}")
+                print(f"[{datetime.now(UTC)}] ❌ Gagal fetch: {resp.status}")
                 return []
             html = await resp.text()
     
@@ -51,31 +51,30 @@ async def scrape_free_ugc():
     
     items = []
     i = 0
-    while i < len(lines):
+    while i < len(lines) - 3:
         line = lines[i]
         
-        # Deteksi nama item (pola yang lebih ketat)
+        # Deteksi nama item (pola ketat: bukan stock, bukan flex, bukan deskripsi situs)
         if (len(line) > 8 and 
-            not re.search(r'^\d+/\d+$', line) and
-            not any(k in line.lower() for k in ["stock", "flex ugc codes", "minutes ago", "hours ago", "ago", "providing statistics", "roblox trading"])):
+            not re.search(r'^\d+ ?/ ?\d+$', line) and
+            "Flex UGC Codes" not in line and
+            not any(k in line.lower() for k in ["stock", "providing statistics", "roblox trading", "most available", "newest added", "search"])):
             
             name = line.strip()
             stock = "Limited"
             location = "Flex UGC Codes"
             time_ago = ""
             
-            # Ambil data berikutnya
+            # Ambil stock, location, dan time di baris berikutnya
             for j in range(1, 10):
                 if i + j >= len(lines):
                     break
                 nxt = lines[i + j]
-                if re.search(r'^\d+ ?/ ?\d+$', nxt):
+                if re.search(r'^\d+ ?/ ?\d+$', nxt) or "Stock" in nxt:
                     stock = nxt
-                elif "Flex UGC Codes" in nxt or "roblox.com/games" in nxt:
+                elif "Flex UGC Codes" in nxt:
                     location = "Flex UGC Codes"
-                elif "Lucky Box" in nxt:
-                    location = "Lucky Box Free UGC"
-                elif any(x in nxt for x in ["minutes ago", "hours ago", "ago"]):
+                elif any(x in nxt.lower() for x in ["minutes ago", "hours ago", "ago"]):
                     time_ago = nxt
             
             items.append({
@@ -84,19 +83,19 @@ async def scrape_free_ugc():
                 "location": location,
                 "time": time_ago
             })
-            i += 5   # loncat lebih jauh supaya tidak duplikat
+            i += 6   # loncat cukup jauh supaya tidak ambil sampah
         else:
             i += 1
     
-    print(f"[{datetime.now(UTC)}] ✅ Ditemukan {len(items)} item free UGC.")
-    return items[:12]  # ambil 12 item terbaru
+    print(f"[{datetime.now(UTC)}] ✅ Ditemukan {len(items)} item free UGC dari Rolimons.")
+    return items[:15]
 
 @tasks.loop(minutes=CHECK_INTERVAL)
 async def check_free_limiteds():
     global sent_items
     channel = bot.get_channel(CHANNEL_ID)
     if not channel:
-        print("❌ Channel tidak ditemukan!")
+        print("❌ Channel ID tidak ditemukan!")
         return
 
     print(f"[{datetime.now(UTC)}] 🔍 Memeriksa Free UGC Limiteds...")
@@ -121,7 +120,7 @@ async def check_free_limiteds():
         embed.add_field(name="Price", value="**FREE**", inline=True)
         embed.add_field(name="Creator", value="Various UGC Creators", inline=False)
         
-        footer = "Rolimons • Ambil secepatnya sebelum stock habis!"
+        footer = f"Rolimons • Ambil secepatnya sebelum stock habis!"
         if item.get("time"):
             footer = f"Rolimons • {item['time']} • Ambil secepatnya!"
         
@@ -131,7 +130,7 @@ async def check_free_limiteds():
             await channel.send("@everyone **New Free Limited UGC Terdeteksi!** 🚨", embed=embed)
             sent_items.add(item_name)
             notified += 1
-            print(f"✅ Terkirim: {item_name[:70]}...")
+            print(f"✅ Terkirim → {item_name[:80]}...")
         except Exception as e:
             print(f"❌ Gagal kirim: {e}")
 
@@ -139,7 +138,7 @@ async def check_free_limiteds():
         save_sent_items(sent_items)
         print(f"Total notifikasi baru: {notified}")
     else:
-        print("Tidak ada item baru.")
+        print("Tidak ada item baru yang belum pernah dikirim.")
 
 @bot.event
 async def on_ready():
